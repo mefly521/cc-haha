@@ -117,7 +117,10 @@ export function MessageList() {
           <AssistantMessage content={streamingText} isStreaming />
         )}
 
-        {chatState !== 'idle' && chatState !== 'streaming' && chatState !== 'permission_pending' && (
+        {/* Only show StreamingIndicator for tool_executing state.
+            During 'thinking', the active ThinkingBlock already shows animation.
+            During 'streaming', the AssistantMessage shows the cursor. */}
+        {chatState === 'tool_executing' && (
           <StreamingIndicator />
         )}
 

@@ -40,6 +40,7 @@ export function CodeViewer({ code, language, maxLines = 20, showLineNumbers = tr
             <pre className="m-0 bg-white p-0 font-[var(--font-mono)] text-[12px] leading-[1.3]">
               {tokens.map((line, i) => {
                 const lineProps = getLineProps({ line })
+                const hasLanguage = !!language && language !== 'text'
                 return effectiveShowLineNumbers ? (
                   <div
                     key={i}
@@ -63,10 +64,16 @@ export function CodeViewer({ code, language, maxLines = 20, showLineNumbers = tr
                     className="hover:bg-[#f6f8fa]/50"
                     style={undefined}
                   >
-                    <span className="block px-3 py-px whitespace-pre-wrap break-words">
-                      {line.map((token, key) => (
-                        <span key={key} {...getTokenProps({ token })} />
-                      ))}
+                    <span className={`block px-3 py-px whitespace-pre-wrap break-words ${!hasLanguage ? 'text-[#24292f]' : ''}`}>
+                      {hasLanguage ? (
+                        line.map((token, key) => (
+                          <span key={key} {...getTokenProps({ token })} />
+                        ))
+                      ) : (
+                        line.map((token, key) => (
+                          <span key={key} {...getTokenProps({ token })} style={{ color: '#24292f' }} />
+                        ))
+                      )}
                     </span>
                   </div>
                 )
