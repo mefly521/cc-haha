@@ -255,13 +255,7 @@ function ProviderFormModal({ open, onClose, mode, provider }: ProviderFormProps)
     if (!canSubmit) return
     setIsSubmitting(true)
     try {
-      if (isOfficial) {
-        await useProviderStore.getState().activateOfficial()
-        await fetchSettings()
-        onClose()
-        return
-      }
-      // Write the edited settings.json directly
+      // Write the edited settings.json first (for all presets including official)
       if (settingsJson.trim()) {
         try {
           const parsed = JSON.parse(settingsJson)
@@ -270,6 +264,17 @@ function ProviderFormModal({ open, onClose, mode, provider }: ProviderFormProps)
         } catch {
           // JSON validation already prevents this
         }
+      }
+
+      if (isOfficial) {
+        try {
+          await useProviderStore.getState().activateOfficial()
+          await fetchSettings()
+        } catch (err) {
+          console.error('Failed to activate official:', err)
+        }
+        onClose()
+        return
       }
 
       if (mode === 'create') {
