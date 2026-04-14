@@ -4,6 +4,7 @@
  * GET    /api/teams                                — 列出所有团队
  * GET    /api/teams/:name                          — 获取团队详情
  * GET    /api/teams/:name/members/:id/transcript   — 获取成员 transcript
+ * POST   /api/teams/:name/members/:id/messages     — 给成员发送消息
  * DELETE /api/teams/:name                          — 删除团队
  */
 
@@ -36,6 +37,26 @@ export async function handleTeamsApi(
       const agentId = decodeURIComponent(segments[4])
       const messages = await teamService.getMemberTranscript(teamName, agentId)
       return Response.json({ messages })
+    }
+
+    // ── POST /api/teams/:name/members/:id/messages ─────────────────────────
+    if (
+      method === 'POST' &&
+      teamName &&
+      segments[3] === 'members' &&
+      segments[4] &&
+      segments[5] === 'messages'
+    ) {
+      const agentId = decodeURIComponent(segments[4])
+      let body: { content?: string }
+      try {
+        body = (await req.json()) as { content?: string }
+      } catch {
+        throw ApiError.badRequest('Invalid JSON body')
+      }
+
+      await teamService.sendMemberMessage(teamName, agentId, body.content ?? '')
+      return Response.json({ ok: true })
     }
 
     // ── GET /api/teams/:name ──────────────────────────────────────────────

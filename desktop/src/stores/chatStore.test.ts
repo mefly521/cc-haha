@@ -1,8 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MessageEntry } from '../types/session'
 
-const { sendMock } = vi.hoisted(() => ({
+const {
+  sendMock,
+  getMemberBySessionIdMock,
+  sendMessageToMemberMock,
+  handleTeamCreatedMock,
+  handleTeamUpdateMock,
+  handleTeamDeletedMock,
+} = vi.hoisted(() => ({
   sendMock: vi.fn(),
+  getMemberBySessionIdMock: vi.fn<(sessionId: string) => any>(() => null),
+  sendMessageToMemberMock: vi.fn(async () => {}),
+  handleTeamCreatedMock: vi.fn(),
+  handleTeamUpdateMock: vi.fn(),
+  handleTeamDeletedMock: vi.fn(),
 }))
 
 vi.mock('../api/websocket', () => ({
@@ -25,9 +37,11 @@ vi.mock('../api/sessions', () => ({
 vi.mock('./teamStore', () => ({
   useTeamStore: {
     getState: () => ({
-      handleTeamCreated: vi.fn(),
-      handleTeamUpdate: vi.fn(),
-      handleTeamDeleted: vi.fn(),
+      getMemberBySessionId: getMemberBySessionIdMock,
+      sendMessageToMember: sendMessageToMemberMock,
+      handleTeamCreated: handleTeamCreatedMock,
+      handleTeamUpdate: handleTeamUpdateMock,
+      handleTeamDeleted: handleTeamDeletedMock,
     }),
   },
 }))
@@ -70,6 +84,9 @@ const initialState = useChatStore.getState()
 describe('chatStore history mapping', () => {
   beforeEach(() => {
     sendMock.mockReset()
+    getMemberBySessionIdMock.mockReset()
+    getMemberBySessionIdMock.mockReturnValue(null)
+    sendMessageToMemberMock.mockReset()
     useChatStore.setState({
       ...initialState,
       sessions: {},
@@ -111,6 +128,28 @@ describe('chatStore history mapping', () => {
     ])
     expect(mapped[2]).toMatchObject({ parentToolUseId: 'agent-1' })
     expect(mapped[3]).toMatchObject({ parentToolUseId: 'agent-1' })
+  })
+
+  it('surfaces teammate prompt content when mapping member transcript history', () => {
+    const messages: MessageEntry[] = [
+      {
+        id: 'user-1',
+        type: 'user',
+        timestamp: '2026-04-06T00:00:00.000Z',
+        content: '<teammate-message teammate_id="security-reviewer">Review the auth diff and call out risks.</teammate-message>',
+      },
+    ]
+
+    const mapped = mapHistoryMessagesToUiMessages(messages, {
+      includeTeammateMessages: true,
+    })
+
+    expect(mapped).toMatchObject([
+      {
+        type: 'user_text',
+        content: 'Review the auth diff and call out risks.',
+      },
+    ])
   })
 
   it('keeps parent tool linkage for live tool events', () => {
@@ -245,6 +284,53 @@ describe('chatStore history mapping', () => {
       status: 'completed',
       summary: 'Agent "修复异常处理" completed',
       outputFile: '/tmp/agent-output.txt',
+    })
+  })
+
+  it('routes member-session messages through team mailbox delivery instead of websocket', async () => {
+    const memberSessionId = 'team-member:security-reviewer@test-team'
+    getMemberBySessionIdMock.mockReturnValue({
+      agentId: 'security-reviewer@test-team',
+      role: 'security-reviewer',
+      status: 'running',
+    })
+
+    useChatStore.setState({
+      sessions: {
+        [memberSessionId]: {
+          messages: [],
+          chatState: 'idle',
+          connectionState: 'connected',
+          streamingText: '',
+          streamingToolInput: '',
+          activeToolUseId: null,
+          activeToolName: null,
+          activeThinkingId: null,
+          pendingPermission: null,
+          tokenUsage: { input_tokens: 0, output_tokens: 0 },
+          elapsedSeconds: 0,
+          statusVerb: '',
+          slashCommands: [],
+          agentTaskNotifications: {},
+          elapsedTimer: null,
+        },
+      },
+    })
+
+    useChatStore.getState().sendMessage(memberSessionId, 'Check the latest regression')
+    await Promise.resolve()
+
+    expect(sendMessageToMemberMock).toHaveBeenCalledWith(
+      memberSessionId,
+      'Check the latest regression',
+    )
+    expect(sendMock).not.toHaveBeenCalled()
+    const sessionMessages = useChatStore.getState().sessions[memberSessionId]?.messages ?? []
+
+    expect(sessionMessages[sessionMessages.length - 1]).toMatchObject({
+      type: 'user_text',
+      content: 'Check the latest regression',
+      pending: true,
     })
   })
 })

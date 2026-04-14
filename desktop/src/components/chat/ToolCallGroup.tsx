@@ -5,6 +5,7 @@ import { Modal } from '../shared/Modal'
 import { useTranslation } from '../../i18n'
 import type { TranslationKey } from '../../i18n'
 import type { AgentTaskNotification, UIMessage } from '../../types/chat'
+import { AGENT_LIFECYCLE_TYPES } from '../../types/team'
 
 type ToolCall = Extract<UIMessage, { type: 'tool_use' }>
 type ToolResult = Extract<UIMessage, { type: 'tool_result' }>
@@ -286,7 +287,7 @@ function AgentCallCard({
         ? getAgentErrorSummary(result.content)
         : ''
   const fullOutputText =
-    result && !result.isError && !isLaunchResult
+    result && !result.isError && !isLaunchResult && !isAgentLifecycleResult(result.content)
       ? extractTextContent(result.content).trim()
       : ''
   const previewText = fullOutputText || (status === 'done' || status === 'stopped' ? taskSummary : '')
@@ -306,7 +307,12 @@ function AgentCallCard({
               </span>
             )}
           </div>
-          {!expanded && recentToolCalls.length > 0 && (
+          {!expanded && outputSummary && (
+            <div className="mt-1 line-clamp-2 text-[11px] text-[var(--color-text-tertiary)]">
+              {outputSummary}
+            </div>
+          )}
+          {!expanded && !outputSummary && recentToolCalls.length > 0 && (
             <div className="mt-1 space-y-1">
               {recentToolCalls.map((recentToolCall) => (
                 <div
@@ -318,14 +324,9 @@ function AgentCallCard({
               ))}
             </div>
           )}
-          {!expanded && !recentToolCalls.length && errorText && (
+          {!expanded && !outputSummary && !recentToolCalls.length && errorText && (
             <div className="mt-1 truncate text-[11px] text-[var(--color-error)]">
               {errorText}
-            </div>
-          )}
-          {!expanded && !recentToolCalls.length && !errorText && outputSummary && (
-            <div className="mt-1 line-clamp-2 text-[11px] text-[var(--color-text-tertiary)]">
-              {outputSummary}
             </div>
           )}
         </div>
@@ -563,6 +564,27 @@ function isAgentLaunchResult(content: unknown): boolean {
     text.includes('The agent is working in the background. You will be notified automatically when it completes.') ||
     text.includes('The agent is running remotely. You will be notified automatically when it completes.')
   )
+}
+
+/**
+ * Check if agent result content is a lifecycle notification (shutdown, terminated, etc.)
+ * rather than actual agent output. These should not be shown to the user as results.
+ */
+function isAgentLifecycleResult(content: unknown): boolean {
+  const text = extractTextContent(content).trim()
+  if (!text) return false
+  // Detect JSON lifecycle messages: shutdown_approved, shutdown_rejected, teammate_terminated
+  if (text.startsWith('{') && text.endsWith('}')) {
+    try {
+      const parsed = JSON.parse(text) as Record<string, unknown>
+      if (typeof parsed.type === 'string' && AGENT_LIFECYCLE_TYPES.has(parsed.type)) {
+        return true
+      }
+    } catch {
+      // Not valid JSON, not a lifecycle message
+    }
+  }
+  return false
 }
 
 function extractTextContent(content: unknown): string {

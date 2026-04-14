@@ -7,6 +7,7 @@ export const zh: Record<TranslationKey, string> = {
   'common.delete': '删除',
   'common.add': '添加',
   'common.run': '运行',
+  'common.send': '发送',
   'common.stop': '停止',
   'common.rename': '重命名',
   'common.retry': '重试',
@@ -491,6 +492,12 @@ export const zh: Record<TranslationKey, string> = {
   'teams.noMessages': '暂无消息',
   'teams.team': '团队:',
   'teams.members': '名成员',
+  'teams.working': '正在工作中...',
+  'teams.thinking': '正在思考中...',
+  'teams.running': '运行中',
+  'teams.leader': '主控',
+  'teams.memberPlaceholder': '直接给这个 Agent 发消息...',
+  'teams.memberSessionHint': '这里发送的消息会直接投递给该 Agent，同时继续刷新它的 transcript。',
 
   // ─── Scheduled Tasks Pages ──────────────────────────────────────
   'scheduledPage.title': '定时任务',

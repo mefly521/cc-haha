@@ -237,6 +237,11 @@ async function ensureSession(chatId: string): Promise<boolean> {
 async function createSessionForChat(chatId: string, workDir: string): Promise<boolean> {
   const numericChatId = Number(chatId)
   try {
+    // Always tear down any stale WS connection before creating a new session.
+    // Without this, bridge.connectSession() below would short-circuit when an
+    // old OPEN connection still exists, leaving messages routed to the old session.
+    bridge.resetSession(chatId)
+
     const sessionId = await httpClient.createSession(workDir)
     sessionStore.set(chatId, sessionId, workDir)
     bridge.connectSession(chatId, sessionId)
@@ -435,7 +440,28 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
     case 'error':
       runtime.state = 'idle'
       runtime.verb = undefined
-      await bot.api.sendMessage(numericChatId, `❌ ${msg.message}`)
+      // Auto-recover from stale thinking block signatures by creating a fresh session.
+      // This happens when the API key or provider changed since the session was created.
+      if (msg.message && /Invalid.*signature.*thinking/i.test(msg.message)) {
+        const stored = sessionStore.get(chatId)
+        const workDir = stored?.workDir || config.defaultProjectDir
+        if (workDir) {
+          await bot.api.sendMessage(numericChatId, '⚠️ 会话上下文已失效，正在自动重建...')
+          clearTransientChatState(chatId)
+          bridge.resetSession(chatId)
+          sessionStore.delete(chatId)
+          const ok = await createSessionForChat(chatId, workDir)
+          if (ok) {
+            await bot.api.sendMessage(numericChatId, '✅ 已重建会话，请重新发送消息。')
+          } else {
+            await bot.api.sendMessage(numericChatId, '❌ 重建会话失败，请发送 /new 手动新建。')
+          }
+        } else {
+          await bot.api.sendMessage(numericChatId, '⚠️ 会话上下文已失效，请发送 /new 新建会话。')
+        }
+      } else {
+        await bot.api.sendMessage(numericChatId, `❌ ${msg.message}`)
+      }
       break
 
     case 'system_notification':

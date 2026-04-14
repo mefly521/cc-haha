@@ -6,6 +6,7 @@ import { useSessionStore } from './sessionStore'
 import { useCLITaskStore } from './cliTaskStore'
 import { useTabStore } from './tabStore'
 import { randomSpinnerVerb } from '../config/spinnerVerbs'
+import { AGENT_LIFECYCLE_TYPES } from '../types/team'
 import type { MessageEntry } from '../types/session'
 import type { PermissionMode } from '../types/settings'
 import type {
@@ -163,6 +164,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   sendMessage: (sessionId, content, attachments?) => {
     const userFacingContent = content.trim()
+    const isMemberSession = !!useTeamStore.getState().getMemberBySessionId(sessionId)
     const uiAttachments: UIAttachment[] | undefined =
       attachments && attachments.length > 0
         ? attachments.map((a) => ({
@@ -177,11 +179,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const allTasksDone = taskStore.tasks.length > 0 && taskStore.tasks.every((t) => t.status === 'completed')
 
     set((s) => {
-      const session = s.sessions[sessionId]
-      if (!session) return s
+      const session = s.sessions[sessionId] ?? createDefaultSessionState()
 
       const newMessages = [...session.messages]
-      if (allTasksDone) {
+      if (!isMemberSession && allTasksDone) {
         newMessages.push({
           id: nextId(),
           type: 'task_summary',
@@ -194,15 +195,18 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         id: nextId(),
         type: 'user_text',
         content: userFacingContent,
-        attachments: uiAttachments,
+        attachments: isMemberSession ? undefined : uiAttachments,
         timestamp: Date.now(),
+        ...(isMemberSession ? { pending: true } : {}),
       })
 
-      if (session.elapsedTimer) clearInterval(session.elapsedTimer)
+      if (!isMemberSession && session.elapsedTimer) clearInterval(session.elapsedTimer)
 
-      const timer = setInterval(() => {
-        set((st) => ({ sessions: updateSessionIn(st.sessions, sessionId, (sess) => ({ elapsedSeconds: sess.elapsedSeconds + 1 })) }))
-      }, 1000)
+      const timer = !isMemberSession
+        ? setInterval(() => {
+            set((st) => ({ sessions: updateSessionIn(st.sessions, sessionId, (sess) => ({ elapsedSeconds: sess.elapsedSeconds + 1 })) }))
+          }, 1000)
+        : null
 
       return {
         sessions: {
@@ -213,12 +217,35 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             chatState: 'thinking',
             elapsedSeconds: 0,
             streamingText: '',
-            statusVerb: randomSpinnerVerb(),
+            statusVerb: isMemberSession ? '' : randomSpinnerVerb(),
             elapsedTimer: timer,
+            connectionState: isMemberSession ? 'connected' : session.connectionState,
           },
         },
       }
     })
+
+    if (isMemberSession) {
+      void useTeamStore.getState().sendMessageToMember(sessionId, userFacingContent)
+        .catch((err) => {
+          set((s) => ({
+            sessions: updateSessionIn(s.sessions, sessionId, (session) => ({
+              chatState: 'idle',
+              messages: [
+                ...session.messages,
+                {
+                  id: nextId(),
+                  type: 'error',
+                  message: err instanceof Error ? err.message : String(err),
+                  code: 'TEAM_MEMBER_MESSAGE_FAILED',
+                  timestamp: Date.now(),
+                },
+              ],
+            })),
+          }))
+        })
+      return
+    }
 
     wsManager.send(sessionId, { type: 'user_message', content, attachments })
   },
@@ -253,10 +280,14 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     try {
       const { messages } = await sessionsApi.getMessages(sessionId)
       const uiMessages = mapHistoryMessagesToUiMessages(messages)
+      const restoredNotifications = reconstructAgentNotifications(messages)
       set((state) => {
         const session = state.sessions[sessionId]
         if (!session || session.messages.length > 0) return state
-        return { sessions: updateSessionIn(state.sessions, sessionId, () => ({ messages: uiMessages })) }
+        return { sessions: updateSessionIn(state.sessions, sessionId, (s) => ({
+          messages: uiMessages,
+          agentTaskNotifications: { ...s.agentTaskNotifications, ...restoredNotifications },
+        })) }
       })
       const lastTodos = extractLastTodoWriteFromHistory(messages)
       if (lastTodos && lastTodos.length > 0) {
@@ -519,11 +550,140 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 type AssistantHistoryBlock = { type: string; text?: string; thinking?: string; name?: string; id?: string; input?: unknown }
 type UserHistoryBlock = { type: string; text?: string; tool_use_id?: string; content?: unknown; is_error?: boolean; source?: { data?: string }; mimeType?: string; media_type?: string; name?: string }
 
-export function mapHistoryMessagesToUiMessages(messages: MessageEntry[]): UIMessage[] {
+/**
+ * Check if text is a teammate-message (internal agent-to-agent communication).
+ * Uses full open+close tag match to avoid false positives on user text
+ * that merely mentions the tag name (e.g., pasting code or discussing the protocol).
+ */
+function isTeammateMessage(text: string): boolean {
+  return text.includes('<teammate-message') && text.includes('</teammate-message>')
+}
+
+const TEAMMATE_CONTENT_REGEX = /<teammate-message\s+teammate_id="([^"]+)"[^>]*>\n?([\s\S]*?)\n?<\/teammate-message>/g
+
+function extractVisibleTeammateMessageContents(text: string): string[] {
+  const contents: string[] = []
+
+  for (const match of text.matchAll(TEAMMATE_CONTENT_REGEX)) {
+    const content = match[2]?.trim()
+    if (!content) continue
+
+    if (content.startsWith('{') && content.endsWith('}')) {
+      try {
+        const parsed = JSON.parse(content) as Record<string, unknown>
+        if (typeof parsed.type === 'string' && AGENT_LIFECYCLE_TYPES.has(parsed.type)) {
+          continue
+        }
+      } catch {
+        // Keep non-JSON payloads that happen to look like JSON.
+      }
+    }
+
+    contents.push(content)
+  }
+
+  return contents
+}
+
+type HistoryMappingOptions = {
+  includeTeammateMessages?: boolean
+}
+
+/**
+ * Reconstruct agentTaskNotifications from history.
+ *
+ * During a live session, background agents report completion via system_notification
+ * events (task_notification). These are NOT persisted in JSONL history. On reload,
+ * we reconstruct them by correlating Agent tool_use names with <teammate-message>
+ * teammate_ids found in subsequent user messages.
+ */
+export function reconstructAgentNotifications(messages: MessageEntry[]): Record<string, AgentTaskNotification> {
+  // Step 1: Collect Agent tool_use blocks → map agent name to toolUseId
+  const agentNameToToolUseId = new Map<string, string>()
+
+  for (const msg of messages) {
+    if ((msg.type === 'assistant' || msg.type === 'tool_use') && Array.isArray(msg.content)) {
+      for (const block of msg.content as AssistantHistoryBlock[]) {
+        if (block.type === 'tool_use' && block.name === 'Agent' && block.id) {
+          const input = block.input as Record<string, unknown> | undefined
+          const name = input?.name as string | undefined
+          // Keep first toolUseId per name (consistent with first-wins for teammateContent)
+          if (name && !agentNameToToolUseId.has(name)) agentNameToToolUseId.set(name, block.id)
+        }
+      }
+    }
+  }
+
+  if (agentNameToToolUseId.size === 0) return {}
+
+  // Step 2: Extract <teammate-message> content by teammate_id
+  // Skip lifecycle messages (shutdown_approved, idle_notification, etc.)
+  // which overwrite actual review content if stored later in history
+  const teammateContent = new Map<string, string>()
+  for (const msg of messages) {
+    if (msg.type !== 'user') continue
+    const text = typeof msg.content === 'string'
+      ? msg.content
+      : Array.isArray(msg.content)
+        ? (msg.content as Array<{ type?: string; text?: string }>).filter((b) => b.type === 'text' && b.text).map((b) => b.text).join('\n')
+        : ''
+    if (!text.includes('<teammate-message')) continue
+    for (const match of text.matchAll(TEAMMATE_CONTENT_REGEX)) {
+      if (match[1] && match[2]) {
+        const content = match[2].trim()
+        // Skip lifecycle JSON messages (shutdown, idle, terminated notifications)
+        if (content.startsWith('{') && content.endsWith('}')) {
+          try {
+            const parsed = JSON.parse(content) as Record<string, unknown>
+            if (typeof parsed.type === 'string' && AGENT_LIFECYCLE_TYPES.has(parsed.type)) continue
+          } catch { /* not JSON, keep it */ }
+        }
+        // Only store the first meaningful content per teammate (avoid overwrite by later lifecycle msgs)
+        if (!teammateContent.has(match[1])) {
+          teammateContent.set(match[1], content)
+        }
+      }
+    }
+  }
+
+  // Step 3: Correlate and build notifications
+  const notifications: Record<string, AgentTaskNotification> = {}
+  for (const [name, toolUseId] of agentNameToToolUseId) {
+    const content = teammateContent.get(name)
+    if (content) {
+      notifications[toolUseId] = {
+        taskId: toolUseId,
+        toolUseId,
+        status: 'completed',
+        summary: content,
+      }
+    }
+  }
+
+  return notifications
+}
+
+export function mapHistoryMessagesToUiMessages(
+  messages: MessageEntry[],
+  options?: HistoryMappingOptions,
+): UIMessage[] {
+  const includeTeammateMessages = options?.includeTeammateMessages === true
   const uiMessages: UIMessage[] = []
   for (const msg of messages) {
     const timestamp = new Date(msg.timestamp).getTime()
     if (msg.type === 'user' && typeof msg.content === 'string') {
+      if (isTeammateMessage(msg.content)) {
+        if (!includeTeammateMessages) continue
+        const teammateContents = extractVisibleTeammateMessageContents(msg.content)
+        if (teammateContents.length === 0) continue
+        uiMessages.push({
+          id: msg.id || nextId(),
+          type: 'user_text',
+          content: teammateContents.join('\n\n'),
+          timestamp,
+        })
+        continue
+      }
       uiMessages.push({ id: msg.id || nextId(), type: 'user_text', content: msg.content, timestamp })
       continue
     }
@@ -543,7 +703,12 @@ export function mapHistoryMessagesToUiMessages(messages: MessageEntry[]): UIMess
       const textParts: string[] = []
       const attachments: UIAttachment[] = []
       for (const block of msg.content as UserHistoryBlock[]) {
-        if (block.type === 'text' && block.text) textParts.push(block.text)
+        if (block.type === 'text' && block.text && isTeammateMessage(block.text)) {
+          if (!includeTeammateMessages) continue
+          textParts.push(...extractVisibleTeammateMessageContents(block.text))
+        } else if (block.type === 'text' && block.text) {
+          textParts.push(block.text)
+        }
         else if (block.type === 'image') attachments.push({ type: 'image', name: block.name || 'image', data: block.source?.data, mimeType: block.mimeType || block.media_type })
         else if (block.type === 'file') attachments.push({ type: 'file', name: block.name || 'file' })
         else if (block.type === 'tool_result') uiMessages.push({ id: nextId(), type: 'tool_result', toolUseId: block.tool_use_id ?? '', content: block.content, isError: !!block.is_error, timestamp, parentToolUseId: msg.parentToolUseId })

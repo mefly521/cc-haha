@@ -160,7 +160,7 @@ export function MessageList() {
   )
 }
 
-const MessageBlock = memo(function MessageBlock({
+export const MessageBlock = memo(function MessageBlock({
   message,
   activeThinkingId,
   agentTaskNotifications,

@@ -868,8 +868,33 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
     case 'error':
       runtime.state = 'idle'
       runtime.verb = undefined
-      // 如果 streaming card 存在就把错误渲染到卡上，否则 fallback 到 sendText
-      if (streamingCards.has(chatId)) {
+      // Auto-recover from stale thinking block signatures by creating a fresh session.
+      if (msg.message && /Invalid.*signature.*thinking/i.test(msg.message)) {
+        // Abort any in-flight streaming card first
+        if (streamingCards.has(chatId)) {
+          const card = streamingCards.get(chatId)!
+          streamingCards.delete(chatId)
+          void card.abort(new Error('session reset')).catch(() => {})
+        }
+        const stored = sessionStore.get(chatId)
+        const workDir = stored?.workDir || config.defaultProjectDir
+        if (workDir) {
+          await sendText(chatId, '⚠️ 会话上下文已失效，正在自动重建...')
+          bridge.resetSession(chatId)
+          sessionStore.delete(chatId)
+          imageWatchers.delete(chatId)
+          uploadedImageKeys.delete(chatId)
+          runtimeStates.delete(chatId)
+          const ok = await createSessionForChat(chatId, workDir)
+          if (ok) {
+            await sendText(chatId, '✅ 已重建会话，请重新发送消息。')
+          } else {
+            await sendText(chatId, '❌ 重建会话失败，请发送 /new 手动新建。')
+          }
+        } else {
+          await sendText(chatId, '⚠️ 会话上下文已失效，请发送 /new 新建会话。')
+        }
+      } else if (streamingCards.has(chatId)) {
         await abortStreamingCard(chatId, new Error(msg.message ?? 'unknown error'))
       } else {
         await sendText(chatId, `❌ ${msg.message}`)

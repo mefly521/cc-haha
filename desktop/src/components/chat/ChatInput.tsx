@@ -3,6 +3,7 @@ import { useTranslation } from '../../i18n'
 import { useChatStore } from '../../stores/chatStore'
 import { useTabStore } from '../../stores/tabStore'
 import { useSessionStore } from '../../stores/sessionStore'
+import { useTeamStore } from '../../stores/teamStore'
 import { sessionsApi } from '../../api/sessions'
 import { PermissionModeSelector } from '../controls/PermissionModeSelector'
 import { ModelSelector } from '../controls/ModelSelector'
@@ -53,12 +54,14 @@ export function ChatInput() {
   const chatState = sessionState?.chatState ?? 'idle'
   const slashCommands = sessionState?.slashCommands ?? []
   const activeSession = useSessionStore((state) => activeTabId ? state.sessions.find((session) => session.id === activeTabId) ?? null : null)
+  const memberInfo = useTeamStore((s) => activeTabId ? s.getMemberBySessionId(activeTabId) : null)
   const [gitInfo, setGitInfo] = useState<GitInfo | null>(null)
   const hasMessages = useChatStore((s) => activeTabId ? (s.sessions[activeTabId]?.messages?.length ?? 0) > 0 : false)
 
+  const isMemberSession = !!memberInfo
   const isActive = chatState !== 'idle'
   const isWorkspaceMissing = activeSession?.workDirExists === false
-  const canSubmit = !isWorkspaceMissing && (input.trim().length > 0 || attachments.length > 0)
+  const canSubmit = !isWorkspaceMissing && (input.trim().length > 0 || (!isMemberSession && attachments.length > 0))
 
   useEffect(() => {
     textareaRef.current?.focus()
@@ -69,8 +72,20 @@ export function ChatInput() {
       setGitInfo(null)
       return
     }
+    if (isMemberSession) {
+      setGitInfo(null)
+      return
+    }
     sessionsApi.getGitInfo(activeTabId).then(setGitInfo).catch(() => setGitInfo(null))
-  }, [activeTabId])
+  }, [activeTabId, isMemberSession])
+
+  useEffect(() => {
+    if (!isMemberSession) return
+    setAttachments([])
+    setPlusMenuOpen(false)
+    setSlashMenuOpen(false)
+    setFileSearchOpen(false)
+  }, [isMemberSession, activeTabId])
 
   useEffect(() => {
     const el = textareaRef.current
@@ -191,6 +206,10 @@ export function ChatInput() {
 
   const handleInputChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = event.target.value
+    if (isMemberSession) {
+      setInput(value)
+      return
+    }
     const cursorPos = event.target.selectionStart ?? value.length
     setInput(value)
     detectSlashTrigger(value, cursorPos)
@@ -212,7 +231,7 @@ export function ChatInput() {
 
   const handleSubmit = () => {
     const text = input.trim()
-    if ((!text && attachments.length === 0) || isWorkspaceMissing) return
+    if ((!text && (!attachments.length || isMemberSession)) || isWorkspaceMissing) return
 
     const attachmentPayload: AttachmentRef[] = attachments.map((attachment) => ({
       type: attachment.type,
@@ -224,7 +243,9 @@ export function ChatInput() {
     sendMessage(activeTabId!, text, attachmentPayload)
     setInput('')
     setAttachments([])
+    setPlusMenuOpen(false)
     setSlashMenuOpen(false)
+    setFileSearchOpen(false)
   }
 
   const handleKeyDown = (event: React.KeyboardEvent) => {
@@ -280,6 +301,7 @@ export function ChatInput() {
   }
 
   const handlePaste = (event: React.ClipboardEvent) => {
+    if (isMemberSession) return
     const items = event.clipboardData?.items
     if (!items) return
 
@@ -315,6 +337,7 @@ export function ChatInput() {
   }
 
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (isMemberSession) return
     const files = event.target.files
     if (!files) return
 
@@ -343,6 +366,7 @@ export function ChatInput() {
 
   const handleDrop = (event: React.DragEvent) => {
     event.preventDefault()
+    if (isMemberSession) return
     const files = event.dataTransfer.files
     if (files.length > 0) {
       const fakeEvent = { target: { files } } as React.ChangeEvent<HTMLInputElement>
@@ -355,6 +379,7 @@ export function ChatInput() {
   }
 
   const insertSlashCommand = () => {
+    if (isMemberSession) return
     const el = textareaRef.current
     const cursorPos = el?.selectionStart ?? input.length
     const replacement = replaceSlashToken(input, cursorPos, '', { trailingSpace: false })
@@ -377,7 +402,7 @@ export function ChatInput() {
           onDragOver={(event) => event.preventDefault()}
           onDrop={handleDrop}
         >
-          {fileSearchOpen && (
+          {!isMemberSession && fileSearchOpen && (
             <FileSearchMenu
               ref={fileSearchRef}
               cwd={gitInfo?.workDir || activeSession?.workDir || ''}
@@ -400,7 +425,7 @@ export function ChatInput() {
             />
           )}
 
-          {slashMenuOpen && filteredCommands.length > 0 && (
+          {!isMemberSession && slashMenuOpen && filteredCommands.length > 0 && (
             <div
               ref={slashMenuRef}
               className="absolute bottom-full left-0 right-0 z-50 mb-2 overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-dropdown)]"
@@ -457,7 +482,9 @@ export function ChatInput() {
             placeholder={
               isWorkspaceMissing
                 ? t('chat.placeholderMissing')
-                : t('chat.placeholder')
+                : isMemberSession
+                  ? t('teams.memberPlaceholder')
+                  : t('chat.placeholder')
             }
             disabled={isWorkspaceMissing}
             rows={1}
@@ -466,55 +493,59 @@ export function ChatInput() {
 
           <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between border-t border-[#dac1ba]/10 px-3 py-3">
             <div className="flex items-center gap-2">
-              <div ref={plusMenuRef} className="relative">
-                <button
-                  onClick={() => setPlusMenuOpen((value) => !value)}
-                  aria-label="Open composer tools"
-                  className="rounded-[var(--radius-md)] p-1.5 text-[var(--color-text-secondary)] transition-colors hover:bg-[#F4F4F0]"
-                >
-                  <span className="material-symbols-outlined text-[18px]">add</span>
-                </button>
+              {!isMemberSession && (
+                <>
+                  <div ref={plusMenuRef} className="relative">
+                    <button
+                      onClick={() => setPlusMenuOpen((value) => !value)}
+                      aria-label="Open composer tools"
+                      className="rounded-[var(--radius-md)] p-1.5 text-[var(--color-text-secondary)] transition-colors hover:bg-[#F4F4F0]"
+                    >
+                      <span className="material-symbols-outlined text-[18px]">add</span>
+                    </button>
 
-                {plusMenuOpen && (
-                  <div className="absolute bottom-full left-0 z-50 mb-2 w-[240px] rounded-xl border border-[#dac1ba]/20 bg-white py-1 shadow-[0_18px_48px_rgba(27,28,26,0.12)]">
-                    <button
-                      onClick={() => {
-                        fileInputRef.current?.click()
-                        setPlusMenuOpen(false)
-                      }}
-                      className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-[#F8F7F4]"
-                    >
-                      <span className="material-symbols-outlined text-[18px] text-[var(--color-text-secondary)]">attach_file</span>
-                      <span className="text-sm text-[var(--color-text-primary)]">{t('chat.addFiles')}</span>
-                    </button>
-                    <button
-                      onClick={insertSlashCommand}
-                      className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-[#F8F7F4]"
-                    >
-                      <span className="w-[24px] text-center text-[18px] font-bold text-[var(--color-text-secondary)]">/</span>
-                      <span className="text-sm text-[var(--color-text-primary)]">{t('chat.slashCommands')}</span>
-                    </button>
+                    {plusMenuOpen && (
+                      <div className="absolute bottom-full left-0 z-50 mb-2 w-[240px] rounded-xl border border-[#dac1ba]/20 bg-white py-1 shadow-[0_18px_48px_rgba(27,28,26,0.12)]">
+                        <button
+                          onClick={() => {
+                            fileInputRef.current?.click()
+                            setPlusMenuOpen(false)
+                          }}
+                          className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-[#F8F7F4]"
+                        >
+                          <span className="material-symbols-outlined text-[18px] text-[var(--color-text-secondary)]">attach_file</span>
+                          <span className="text-sm text-[var(--color-text-primary)]">{t('chat.addFiles')}</span>
+                        </button>
+                        <button
+                          onClick={insertSlashCommand}
+                          className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-[#F8F7F4]"
+                        >
+                          <span className="w-[24px] text-center text-[18px] font-bold text-[var(--color-text-secondary)]">/</span>
+                          <span className="text-sm text-[var(--color-text-primary)]">{t('chat.slashCommands')}</span>
+                        </button>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
 
-              <PermissionModeSelector />
+                  <PermissionModeSelector />
+                </>
+              )}
             </div>
 
             <div className="flex items-center gap-2">
-              <ModelSelector />
+              {!isMemberSession && <ModelSelector />}
               <button
-                onClick={isActive ? () => stopGeneration(activeTabId!) : handleSubmit}
-                disabled={!isActive && !canSubmit}
-                title={isActive ? t('chat.stopTitle') : undefined}
+                onClick={!isMemberSession && isActive ? () => stopGeneration(activeTabId!) : handleSubmit}
+                disabled={!isMemberSession && isActive ? false : !canSubmit}
+                title={!isMemberSession && isActive ? t('chat.stopTitle') : undefined}
                 className={`flex w-[112px] items-center justify-center gap-1 rounded-lg px-3 py-1.5 text-xs font-semibold text-white transition-all hover:opacity-90 disabled:opacity-30 ${
-                  isActive ? 'bg-[var(--color-error)]' : 'bg-[var(--color-brand)]'
+                  !isMemberSession && isActive ? 'bg-[var(--color-error)]' : 'bg-[var(--color-brand)]'
                 }`}
               >
                 <span className="material-symbols-outlined text-[14px]">
-                  {isActive ? 'stop' : 'arrow_forward'}
+                  {!isMemberSession && isActive ? 'stop' : 'arrow_forward'}
                 </span>
-                {isActive ? t('common.stop') : t('common.run')}
+                {!isMemberSession && isActive ? t('common.stop') : isMemberSession ? t('common.send') : t('common.run')}
               </button>
             </div>
           </div>
@@ -522,33 +553,33 @@ export function ChatInput() {
 
         <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileSelect} />
 
-        <div className="mt-3 px-1">
-          {hasMessages ? (
-            <ProjectContextChip
-              workDir={gitInfo?.workDir || activeSession?.workDir}
-              repoName={gitInfo?.repoName || null}
-              branch={gitInfo?.branch || null}
-            />
-          ) : (
-            <DirectoryPicker
-              value={gitInfo?.workDir || activeSession?.workDir || ''}
-              onChange={async (newWorkDir) => {
-                if (!activeTabId) return
-                const oldId = activeTabId
-                const { deleteSession, createSession } = useSessionStore.getState()
-                const { replaceTabSession } = useTabStore.getState()
-                const { disconnectSession, connectToSession } = useChatStore.getState()
-                // Create new session first, then swap tab in-place
-                const newId = await createSession(newWorkDir)
-                disconnectSession(oldId)
-                replaceTabSession(oldId, newId)
-                connectToSession(newId)
-                // Clean up old session in background
-                deleteSession(oldId).catch(() => {})
-              }}
-            />
-          )}
-        </div>
+        {!isMemberSession && (
+          <div className="mt-3 px-1">
+            {hasMessages ? (
+              <ProjectContextChip
+                workDir={gitInfo?.workDir || activeSession?.workDir}
+                repoName={gitInfo?.repoName || null}
+                branch={gitInfo?.branch || null}
+              />
+            ) : (
+              <DirectoryPicker
+                value={gitInfo?.workDir || activeSession?.workDir || ''}
+                onChange={async (newWorkDir) => {
+                  if (!activeTabId) return
+                  const oldId = activeTabId
+                  const { deleteSession, createSession } = useSessionStore.getState()
+                  const { replaceTabSession } = useTabStore.getState()
+                  const { disconnectSession, connectToSession } = useChatStore.getState()
+                  const newId = await createSession(newWorkDir)
+                  disconnectSession(oldId)
+                  replaceTabSession(oldId, newId)
+                  connectToSession(newId)
+                  deleteSession(oldId).catch(() => {})
+                }}
+              />
+            )}
+          </div>
+        )}
       </div>
     </div>
   )

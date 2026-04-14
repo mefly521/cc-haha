@@ -40,6 +40,7 @@ docs/superpowers/
 
 # Debug / temp screenshots (root dir only)
 /*.png
+bug_attachments/
 
 # Private keys & credentials
 *.pem

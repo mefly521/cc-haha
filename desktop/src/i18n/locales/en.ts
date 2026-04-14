@@ -5,6 +5,7 @@ export const en = {
   'common.delete': 'Delete',
   'common.add': 'Add',
   'common.run': 'Run',
+  'common.send': 'Send',
   'common.stop': 'Stop',
   'common.rename': 'Rename',
   'common.retry': 'Retry',
@@ -489,6 +490,12 @@ export const en = {
   'teams.noMessages': 'No messages yet',
   'teams.team': 'Team:',
   'teams.members': 'members',
+  'teams.working': 'Working...',
+  'teams.thinking': 'Thinking...',
+  'teams.running': 'running',
+  'teams.leader': 'team-lead',
+  'teams.memberPlaceholder': 'Message this teammate directly...',
+  'teams.memberSessionHint': 'Messages here go straight to this teammate while you watch its transcript update.',
 
   // ─── Scheduled Tasks Pages ──────────────────────────────────────
   'scheduledPage.title': 'Scheduled tasks',

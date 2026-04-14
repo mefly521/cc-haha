@@ -59,6 +59,20 @@ async function writeTranscriptFile(
   return filePath
 }
 
+async function writeSubagentTranscriptFile(
+  projectDir: string,
+  leadSessionId: string,
+  fileName: string,
+  entries: Record<string, unknown>[],
+): Promise<string> {
+  const dir = path.join(tmpDir, 'projects', projectDir, leadSessionId, 'subagents')
+  await fs.mkdir(dir, { recursive: true })
+  const filePath = path.join(dir, fileName)
+  const content = entries.map((e) => JSON.stringify(e)).join('\n') + '\n'
+  await fs.writeFile(filePath, content, 'utf-8')
+  return filePath
+}
+
 /** Create a standard team config for testing. */
 function makeTeamConfig(overrides?: Record<string, unknown>) {
   return {
@@ -164,14 +178,59 @@ describe('TeamService', () => {
   // --------------------------------------------------------------------------
 
   it('should return team detail with members', async () => {
-    await writeTeamConfig('detail-team', makeTeamConfig({ name: 'detail-team' }))
+    await writeTeamConfig(
+      'detail-team',
+      makeTeamConfig({
+        name: 'detail-team',
+        leadSessionId: 'lead-session-xyz',
+      }),
+    )
 
     const detail = await service.getTeam('detail-team')
     expect(detail.name).toBe('detail-team')
     expect(detail.leadAgentId).toBe('agent-lead')
+    expect(detail.leadSessionId).toBe('lead-session-xyz')
     expect(detail.members).toHaveLength(2)
     expect(detail.members[0]!.agentId).toBe('agent-lead')
     expect(detail.members[1]!.agentId).toBe('agent-worker')
+  })
+
+  it('should discover missing in-process members from subagent transcripts', async () => {
+    await writeTeamConfig(
+      'subagent-team',
+      makeTeamConfig({
+        name: 'subagent-team',
+        leadSessionId: 'lead-session-subagents',
+        members: [
+          {
+            agentId: 'agent-lead',
+            name: 'Lead Agent',
+            agentType: 'lead',
+            joinedAt: 1700000000000,
+            tmuxPaneId: '%0',
+            cwd: '/tmp/project',
+            sessionId: 'session-lead-001',
+            isActive: true,
+          },
+        ],
+      }),
+    )
+
+    await writeSubagentTranscriptFile(
+      '-tmp-project',
+      'lead-session-subagents',
+      'agent-1.jsonl',
+      [
+        {
+          agentName: 'security-reviewer',
+          agentId: 'security-reviewer@subagent-team',
+          timestamp: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+    )
+
+    const detail = await service.getTeam('subagent-team')
+    expect(detail.members.some((member) => member.name === 'security-reviewer')).toBe(true)
   })
 
   it('should derive running status for active member', async () => {
@@ -274,7 +333,7 @@ describe('TeamService', () => {
 
     expect(
       service.getMemberTranscript('member-team', 'nonexistent-agent'),
-    ).rejects.toThrow('Member not found')
+    ).rejects.toThrow('Team member not found')
   })
 
   it('should skip meta entries in transcript', async () => {
@@ -299,6 +358,61 @@ describe('TeamService', () => {
     const messages = await service.getMemberTranscript('meta-team', 'agent-lead')
     expect(messages).toHaveLength(1)
     expect(messages[0]!.id).toBe('msg-real')
+  })
+
+  // --------------------------------------------------------------------------
+  // sendMemberMessage
+  // --------------------------------------------------------------------------
+
+  it('should write member messages into the teammate inbox', async () => {
+    await writeTeamConfig('mailbox-team', makeTeamConfig({ name: 'mailbox-team' }))
+
+    await service.sendMemberMessage(
+      'mailbox-team',
+      'agent-worker',
+      'Please review the latest diff',
+    )
+
+    const inboxPath = path.join(
+      tmpDir,
+      'teams',
+      'mailbox-team',
+      'inboxes',
+      'Worker-Agent.json',
+    )
+    const rawInbox = await fs.readFile(inboxPath, 'utf-8')
+    const inbox = JSON.parse(rawInbox) as Array<{
+      from: string
+      text: string
+      read: boolean
+    }>
+
+    expect(inbox).toHaveLength(1)
+    expect(inbox[0]).toMatchObject({
+      from: 'user',
+      text: 'Please review the latest diff',
+      read: false,
+    })
+  })
+
+  it('should send messages to inbox-discovered members', async () => {
+    await writeTeamConfig('inbox-team', makeTeamConfig({ name: 'inbox-team' }))
+    const inboxDir = path.join(tmpDir, 'teams', 'inbox-team', 'inboxes')
+    await fs.mkdir(inboxDir, { recursive: true })
+    await fs.writeFile(path.join(inboxDir, 'security-reviewer.json'), '[]', 'utf-8')
+
+    await service.sendMemberMessage(
+      'inbox-team',
+      'security-reviewer@inbox-team',
+      'Check the auth changes',
+    )
+
+    const rawInbox = await fs.readFile(
+      path.join(inboxDir, 'security-reviewer.json'),
+      'utf-8',
+    )
+    const inbox = JSON.parse(rawInbox) as Array<{ text: string }>
+    expect(inbox.at(-1)?.text).toBe('Check the auth changes')
   })
 
   // --------------------------------------------------------------------------
@@ -395,7 +509,10 @@ describe('Teams API', () => {
   })
 
   it('GET /api/teams/:name should return team detail', async () => {
-    await writeTeamConfig('detail', makeTeamConfig({ name: 'detail' }))
+    await writeTeamConfig(
+      'detail',
+      makeTeamConfig({ name: 'detail', leadSessionId: 'leader-session-id' }),
+    )
 
     const res = await fetch(`${baseUrl}/api/teams/detail`)
     expect(res.status).toBe(200)
@@ -403,10 +520,12 @@ describe('Teams API', () => {
     const body = (await res.json()) as {
       name: string
       leadAgentId: string
+      leadSessionId?: string
       members: Array<{ agentId: string }>
     }
     expect(body.name).toBe('detail')
     expect(body.leadAgentId).toBe('agent-lead')
+    expect(body.leadSessionId).toBe('leader-session-id')
     expect(body.members).toHaveLength(2)
   })
 
@@ -446,6 +565,30 @@ describe('Teams API', () => {
       `${baseUrl}/api/teams/t2-team/members/unknown-agent/transcript`,
     )
     expect(res.status).toBe(404)
+  })
+
+  it('POST /api/teams/:name/members/:id/messages should enqueue a mailbox message', async () => {
+    await writeTeamConfig('send-team', makeTeamConfig({ name: 'send-team' }))
+
+    const res = await fetch(
+      `${baseUrl}/api/teams/send-team/members/agent-worker/messages`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: 'Please continue with the failing test' }),
+      },
+    )
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok: boolean }
+    expect(body.ok).toBe(true)
+
+    const rawInbox = await fs.readFile(
+      path.join(tmpDir, 'teams', 'send-team', 'inboxes', 'Worker-Agent.json'),
+      'utf-8',
+    )
+    const inbox = JSON.parse(rawInbox) as Array<{ text: string }>
+    expect(inbox.at(-1)?.text).toBe('Please continue with the failing test')
   })
 
   it('DELETE /api/teams/:name should delete team', async () => {

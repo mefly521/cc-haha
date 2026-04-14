@@ -126,13 +126,13 @@ describe('TeamWatcher.extractMemberStatuses', () => {
     expect(statuses).toHaveLength(2)
     expect(statuses[0]).toEqual({
       agentId: 'agent-lead',
-      role: 'lead',
+      role: 'Lead Agent',
       status: 'running',
       currentTask: undefined,
     })
     expect(statuses[1]).toEqual({
       agentId: 'agent-worker',
-      role: 'worker',
+      role: 'Worker Agent',
       status: 'idle',
       currentTask: undefined,
     })
@@ -153,12 +153,12 @@ describe('TeamWatcher.extractMemberStatuses', () => {
     expect(statuses[1]!.status).toBe('idle')
   })
 
-  it('should use agentType as role', () => {
+  it('should prefer member name as role when present', () => {
     const config = makeTeamConfig()
     const statuses = watcher.extractMemberStatuses(config)
 
-    expect(statuses[0]!.role).toBe('lead')
-    expect(statuses[1]!.role).toBe('worker')
+    expect(statuses[0]!.role).toBe('Lead Agent')
+    expect(statuses[1]!.role).toBe('Worker Agent')
   })
 
   it('should fall back to name when agentType is missing', () => {

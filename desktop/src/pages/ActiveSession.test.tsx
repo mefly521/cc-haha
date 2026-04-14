@@ -24,12 +24,14 @@ import { useChatStore } from '../stores/chatStore'
 import { useCLITaskStore } from '../stores/cliTaskStore'
 import { useSessionStore } from '../stores/sessionStore'
 import { useTabStore } from '../stores/tabStore'
+import { useTeamStore } from '../stores/teamStore'
 
 afterEach(() => {
   vi.useRealTimers()
   useTabStore.setState({ tabs: [], activeTabId: null })
   useSessionStore.setState({ sessions: [], activeSessionId: null, isLoading: false, error: null })
   useChatStore.setState({ sessions: {} })
+  useTeamStore.setState({ teams: [], activeTeam: null, memberColors: new Map(), error: null })
 })
 
 describe('ActiveSession task polling', () => {
@@ -98,6 +100,78 @@ describe('ActiveSession task polling', () => {
     expect(
       fetchSessionTasks.mock.calls.filter(([currentSessionId]) => currentSessionId === sessionId),
     ).toHaveLength(3)
+
+    unmount()
+    useCLITaskStore.setState(originalCliTaskState)
+  })
+
+  it('keeps member sessions interactive and skips leader task polling', () => {
+    const memberSessionId = 'team-member:security-reviewer@test-team'
+    const originalCliTaskState = useCLITaskStore.getState()
+    const fetchSessionTasks = vi.fn().mockResolvedValue(undefined)
+
+    useCLITaskStore.setState({
+      sessionId: null,
+      tasks: [],
+      fetchSessionTasks,
+    })
+
+    useTeamStore.setState({
+      teams: [],
+      activeTeam: {
+        name: 'test-team',
+        leadAgentId: 'team-lead@test-team',
+        leadSessionId: 'leader-session',
+        members: [
+          {
+            agentId: 'team-lead@test-team',
+            role: 'team-lead',
+            status: 'running',
+            sessionId: 'leader-session',
+          },
+          {
+            agentId: 'security-reviewer@test-team',
+            role: 'security-reviewer',
+            status: 'running',
+          },
+        ],
+      },
+      memberColors: new Map(),
+      error: null,
+    })
+
+    useTabStore.setState({
+      tabs: [{ sessionId: memberSessionId, title: 'security-reviewer', type: 'session', status: 'idle' }],
+      activeTabId: memberSessionId,
+    })
+
+    useChatStore.setState({
+      sessions: {
+        [memberSessionId]: {
+          messages: [],
+          chatState: 'thinking',
+          connectionState: 'connected',
+          streamingText: '',
+          streamingToolInput: '',
+          activeToolUseId: null,
+          activeToolName: null,
+          activeThinkingId: null,
+          pendingPermission: null,
+          tokenUsage: { input_tokens: 0, output_tokens: 0 },
+          elapsedSeconds: 0,
+          statusVerb: '',
+          slashCommands: [],
+          agentTaskNotifications: {},
+          elapsedTimer: null,
+        },
+      },
+    })
+
+    const { queryByTestId, unmount } = render(<ActiveSession />)
+
+    expect(queryByTestId('chat-input')).toBeInTheDocument()
+    expect(queryByTestId('session-task-bar')).not.toBeInTheDocument()
+    expect(fetchSessionTasks).not.toHaveBeenCalled()
 
     unmount()
     useCLITaskStore.setState(originalCliTaskState)

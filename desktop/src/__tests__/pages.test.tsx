@@ -6,7 +6,6 @@ import '@testing-library/jest-dom'
 import { EmptySession } from '../pages/EmptySession'
 import { ActiveSession } from '../pages/ActiveSession'
 import { AgentTeams } from '../pages/AgentTeams'
-import { AgentTranscript } from '../pages/AgentTranscript'
 import { ScheduledTasks } from '../pages/ScheduledTasks'
 import { ToolInspection } from '../pages/ToolInspection'
 
@@ -107,13 +106,6 @@ describe('Content-only pages render without errors', () => {
     expect(container.innerHTML).toContain('groups')
   })
 
-  it('AgentTranscript renders transcript content', () => {
-    const { container } = render(<AgentTranscript />)
-    expect(container.innerHTML).toContain('Frontend Dev')
-    expect(container.innerHTML).toContain('Back to Leader')
-    expect(container.innerHTML).toContain('Navigation.tsx')
-  })
-
   it('ScheduledTasks renders (store-connected)', async () => {
     const { container } = render(<ScheduledTasks />)
     await screen.findByText('Scheduled tasks')
@@ -160,7 +152,7 @@ describe('AppShell layout renders chrome', () => {
 
 describe('Design system compliance', () => {
   it('Pages use Material Symbols Outlined icons', () => {
-    const pages = [EmptySession, AgentTeams, AgentTranscript, ToolInspection]
+    const pages = [EmptySession, AgentTeams, ToolInspection]
     for (const Page of pages) {
       const { container, unmount } = render(<Page />)
       const icons = container.querySelectorAll('.material-symbols-outlined')
@@ -192,10 +184,5 @@ describe('Mock data integration', () => {
     expect(container.innerHTML).toContain('Frontend Dev')
     expect(container.innerHTML).toContain('Backend Dev')
     expect(container.innerHTML).toContain('Tester')
-  })
-
-  it('AgentTranscript shows transcript content', () => {
-    const { container } = render(<AgentTranscript />)
-    expect(container.innerHTML).toContain('Navigation.tsx')
   })
 })
