@@ -100,7 +100,7 @@ describe('ActiveSession task polling', () => {
 
     expect(
       fetchSessionTasks.mock.calls.filter(([currentSessionId]) => currentSessionId === sessionId),
-    ).toHaveLength(3)
+    ).toHaveLength(4)
 
     unmount()
     useCLITaskStore.setState(originalCliTaskState)

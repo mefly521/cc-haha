@@ -83,7 +83,16 @@ export const useCLITaskStore = create<CLITaskStore>((set, get) => ({
   dismissedCompletionKey: null,
 
   fetchSessionTasks: async (sessionId) => {
-    set({ sessionId })
+    if (get().sessionId !== sessionId) {
+      set({
+        sessionId,
+        tasks: [],
+        completedAndDismissed: false,
+        dismissedCompletionKey: null,
+        expanded: false,
+      })
+    }
+
     try {
       const { tasks } = await cliTasksApi.getTasksForList(sessionId)
       // Only update if still tracking the same session
@@ -96,7 +105,7 @@ export const useCLITaskStore = create<CLITaskStore>((set, get) => ({
     } catch {
       // No tasks for this session — that's fine
       if (get().sessionId === sessionId) {
-        set({ tasks: [], completedAndDismissed: false, dismissedCompletionKey: null })
+        set({ tasks: [], completedAndDismissed: false, dismissedCompletionKey: null, expanded: false })
       }
     }
   },

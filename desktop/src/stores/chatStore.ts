@@ -120,6 +120,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   getSession: (sessionId) => get().sessions[sessionId] ?? createDefaultSessionState(),
 
   connectToSession: (sessionId) => {
+    void useCLITaskStore.getState().fetchSessionTasks(sessionId)
+
     const existing = get().sessions[sessionId]
     if (existing && existing.connectionState !== 'disconnected') return
 
@@ -144,7 +146,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     })
 
     get().loadHistory(sessionId)
-    useCLITaskStore.getState().fetchSessionTasks(sessionId)
     sessionsApi.getSlashCommands(sessionId)
       .then(({ commands }) => {
         if (get().sessions[sessionId]) {

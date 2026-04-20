@@ -8,6 +8,11 @@ const {
   handleTeamCreatedMock,
   handleTeamUpdateMock,
   handleTeamDeletedMock,
+  fetchSessionTasksMock,
+  clearTasksMock,
+  setTasksFromTodosMock,
+  markCompletedAndDismissedMock,
+  refreshTasksMock,
 } = vi.hoisted(() => ({
   sendMock: vi.fn(),
   getMemberBySessionIdMock: vi.fn<(sessionId: string) => any>(() => null),
@@ -15,6 +20,11 @@ const {
   handleTeamCreatedMock: vi.fn(),
   handleTeamUpdateMock: vi.fn(),
   handleTeamDeletedMock: vi.fn(),
+  fetchSessionTasksMock: vi.fn(),
+  clearTasksMock: vi.fn(),
+  setTasksFromTodosMock: vi.fn(),
+  markCompletedAndDismissedMock: vi.fn(),
+  refreshTasksMock: vi.fn(),
 }))
 
 vi.mock('../api/websocket', () => ({
@@ -66,12 +76,13 @@ vi.mock('./sessionStore', () => ({
 vi.mock('./cliTaskStore', () => ({
   useCLITaskStore: {
     getState: () => ({
-      fetchSessionTasks: vi.fn(),
+      fetchSessionTasks: fetchSessionTasksMock,
       tasks: [],
-      clearTasks: vi.fn(),
-      setTasksFromTodos: vi.fn(),
-      markCompletedAndDismissed: vi.fn(),
-      refreshTasks: vi.fn(),
+      sessionId: null,
+      clearTasks: clearTasksMock,
+      setTasksFromTodos: setTasksFromTodosMock,
+      markCompletedAndDismissed: markCompletedAndDismissedMock,
+      refreshTasks: refreshTasksMock,
     }),
   },
 }))
@@ -87,6 +98,11 @@ describe('chatStore history mapping', () => {
     getMemberBySessionIdMock.mockReset()
     getMemberBySessionIdMock.mockReturnValue(null)
     sendMessageToMemberMock.mockReset()
+    fetchSessionTasksMock.mockReset()
+    clearTasksMock.mockReset()
+    setTasksFromTodosMock.mockReset()
+    markCompletedAndDismissedMock.mockReset()
+    refreshTasksMock.mockReset()
     useChatStore.setState({
       ...initialState,
       sessions: {},
@@ -501,5 +517,34 @@ describe('chatStore history mapping', () => {
       content: 'Check the latest regression',
       pending: true,
     })
+  })
+
+  it('refreshes CLI tasks when switching to an already-connected session', () => {
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: {
+          messages: [],
+          chatState: 'idle',
+          connectionState: 'connected',
+          streamingText: '',
+          streamingToolInput: '',
+          activeToolUseId: null,
+          activeToolName: null,
+          activeThinkingId: null,
+          pendingPermission: null,
+          pendingComputerUsePermission: null,
+          tokenUsage: { input_tokens: 0, output_tokens: 0 },
+          elapsedSeconds: 0,
+          statusVerb: '',
+          slashCommands: [],
+          agentTaskNotifications: {},
+          elapsedTimer: null,
+        },
+      },
+    })
+
+    useChatStore.getState().connectToSession(TEST_SESSION_ID)
+
+    expect(fetchSessionTasksMock).toHaveBeenCalledWith(TEST_SESSION_ID)
   })
 })
